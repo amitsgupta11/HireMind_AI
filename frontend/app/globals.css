@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-paper text-[#12162B] font-body antialiased transition-colors duration-300;
+}
+
+html.dark body {
+  @apply bg-ink text-[#E7E9F5];
+}
+
+/* Respect reduced-motion preference across the whole app */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Glass card surface used by cards, nav, modals */
+.glass-panel {
+  @apply bg-paper-soft/80 backdrop-blur-xl border border-line-light shadow-glass;
+}
+html.dark .glass-panel {
+  @apply bg-ink-soft/70 border-line-dark shadow-glass-dark;
+}
+
+/* Visible keyboard focus ring — accessibility floor */
+:focus-visible {
+  outline: 2px solid #6C5CE7;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Signal-gradient text used for key numerals/headlines */
+.text-signal {
+  @apply bg-signal-gradient bg-clip-text text-transparent;
+}
+
+.container-shell {
+  @apply mx-auto w-full max-w-7xl px-6 lg:px-10;
+}

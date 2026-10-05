@@ -1,0 +1,334 @@
+// HireMind AI — Full Database Schema (Phases 1–15, consolidated)
+// This is the FINAL schema for the whole project. Run ONE migration
+// after applying all phase code: `npx prisma migrate dev --name full_schema`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CANDIDATE
+  RECRUITER
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model User {
+  id               String        @id @default(cuid())
+  email            String        @unique
+  passwordHash     String
+  role             Role
+  status           AccountStatus @default(ACTIVE)
+  resetTokenHash   String?
+  resetTokenExpiry DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  candidateProfile CandidateProfile?
+  recruiterProfile RecruiterProfile?
+  resumes          Resume[]
+  applications     Application[]
+  notifications    Notification[]
+
+  @@index([role])
+}
+
+model CandidateProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName  String
+  headline  String?
+  location  String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  website   String?
+  logoUrl   String?
+  about     String?
+  createdAt DateTime @default(now())
+
+  recruiters RecruiterProfile[]
+  jobs       Job[]
+}
+
+model RecruiterProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName  String
+  title     String?
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Job {
+  id             String   @id @default(cuid())
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  title          String
+  description    String
+  location       String
+  employmentType String?
+  experienceMin  Int      @default(0)
+  experienceMax  Int?
+  salaryMin      Int?
+  salaryMax      Int?
+  isPublished    Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  skills       JobSkill[]
+  applications Application[]
+  assessment   Assessment?
+
+  @@index([isPublished])
+}
+
+enum SkillLevel {
+  REQUIRED
+  PREFERRED
+}
+
+model JobSkill {
+  id    String     @id @default(cuid())
+  jobId String
+  job   Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  name  String
+  level SkillLevel
+
+  @@index([jobId])
+  @@index([name])
+}
+
+// Real resume records — one row per upload, so a candidate's upload
+// history is preserved. The candidate's "current" resume is simply the
+// most recently created row. Status reflects the ACTUAL worker pipeline
+// state (Phase 5 text extraction, Phase 6 AI parsing) — never set to a
+// value the worker hasn't really reached yet.
+model Resume {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileName      String
+  storageKey    String
+  fileUrl       String
+  storedLocally Boolean   @default(false)
+  mimeType      String
+  sizeBytes     Int
+  status        String    @default("UPLOADED") // UPLOADED -> QUEUED -> PROCESSING -> ANALYZING -> COMPLETED | FAILED
+  extractedText String?
+  failureReason String?
+  processedAt   DateTime?
+
+  // Phase 6 — AI-extracted structured facts (validated against a Zod
+  // schema before ever being saved) and the deterministic score computed
+  // from them. The AI never invents the score itself — see
+  // src/services/resumeScoring.service.js for the documented formula.
+  skills          Json?
+  education       Json?
+  experience      Json?
+  projects        Json?
+  certifications  Json?
+  resumeScore     Int?
+  scoreBreakdown  Json?
+  strengths       Json?
+  weaknesses      Json?
+  recommendations Json?
+  aiProcessedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// One application per (job, user) pair — status moves forward as the
+// recruiter and the platform's own pipeline (assessment, interview) act
+// on it. Kept as a documented String (not an enum) for the same reason
+// Resume.status is a String: consistent convention across the codebase.
+model Application {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    String   @default("APPLIED") // APPLIED -> UNDER_REVIEW -> ASSESSMENT_ASSIGNED -> INTERVIEW_ASSIGNED -> SHORTLISTED | REJECTED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assessmentAttempt     AssessmentAttempt?
+  interview             Interview?
+  candidateIntelligence CandidateIntelligence?
+
+  @@unique([jobId, userId])
+  @@index([jobId])
+  @@index([userId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String // APPLICATION_STATUS | RESUME_PROCESSED | ASSESSMENT_ASSIGNED | INTERVIEW_ASSIGNED | SHORTLISTED | REJECTED
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// One assessment per job (optional). MCQ questions are scored
+// deterministically (+4 correct / -1 wrong, see assessmentScoring
+// service); subjective answers are stored for the recruiter to read —
+// never auto-scored, since that would require fabricating a judgment.
+model Assessment {
+  id              String   @id @default(cuid())
+  jobId           String   @unique
+  job             Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  title           String
+  durationMinutes Int      @default(30)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  questions Question[]
+  attempts  AssessmentAttempt[]
+}
+
+model Question {
+  id           String     @id @default(cuid())
+  assessmentId String
+  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  type         String // MCQ | SUBJECTIVE
+  text         String
+  options      Json? // string[] — MCQ only
+  correctIndex Int? // MCQ only
+  order        Int        @default(0)
+
+  answers Answer[]
+
+  @@index([assessmentId])
+}
+
+model AssessmentAttempt {
+  id            String      @id @default(cuid())
+  assessmentId  String
+  assessment    Assessment  @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  applicationId String      @unique
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  status        String      @default("IN_PROGRESS") // IN_PROGRESS | SUBMITTED
+  score         Int?
+  maxScore      Int?
+  startedAt     DateTime    @default(now())
+  submittedAt   DateTime?
+
+  answers Answer[]
+
+  @@index([assessmentId])
+}
+
+model Answer {
+  id            String            @id @default(cuid())
+  attemptId     String
+  attempt       AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId    String
+  question      Question          @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedIndex Int?
+  textAnswer    String?
+  isCorrect     Boolean?
+  pointsAwarded Int?
+
+  @@unique([attemptId, questionId])
+}
+
+// One AI interview per application. Questions are generated one at a
+// time by the AI (ai/interviewGenerator.js) based on the job + resume;
+// each answer is evaluated by the AI against fixed criteria
+// (ai/interviewEvaluator.js), validated by Zod. The final interview
+// score is a deterministic average of those per-question evaluations —
+// never a single number asked from the AI directly.
+model Interview {
+  id             String    @id @default(cuid())
+  applicationId  String    @unique
+  application    Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  status         String    @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
+  overallScore   Int?
+  scoreBreakdown Json?
+  summary        String?
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  questions InterviewQuestion[]
+}
+
+model InterviewQuestion {
+  id           String    @id @default(cuid())
+  interviewId  String
+  interview    Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  order        Int
+  questionText String
+  createdAt    DateTime  @default(now())
+
+  answer InterviewAnswer?
+}
+
+model InterviewAnswer {
+  id                  String            @id @default(cuid())
+  interviewQuestionId String            @unique
+  interviewQuestion   InterviewQuestion @relation(fields: [interviewQuestionId], references: [id], onDelete: Cascade)
+  answerText          String
+  technicalAccuracy   Int?
+  communication       Int?
+  problemSolving      Int?
+  confidence          Int?
+  relevance           Int?
+  feedback            String?
+  createdAt           DateTime          @default(now())
+}
+
+// The core feature — computed on demand (not a cron job) from whichever
+// of Resume / Match / Assessment / Interview scores currently exist for
+// this application. Weights are documented in
+// candidateIntelligence.service.js, never scattered in the UI.
+model CandidateIntelligence {
+  id              String      @id @default(cuid())
+  applicationId   String      @unique
+  application     Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  resumeScore     Int?
+  matchScore      Int?
+  assessmentScore Int?
+  interviewScore  Int?
+  overallScore    Int?
+  computedAt      DateTime    @default(now())
+}
+
+// Audit trail for recruiter actions that affect a candidate's outcome —
+// shortlisting, rejecting, publishing a job. Append-only, never edited.
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  action     String
+  targetType String
+  targetId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+}
