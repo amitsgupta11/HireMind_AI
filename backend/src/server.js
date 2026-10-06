@@ -45,4 +45,15 @@ server.listen(port, () => {
   console.log(`HireMind AI API running on http://localhost:${port}`);
 });
 
+
+
+// On Render's free tier, run the resume worker inside this same process
+// instead of paying for a separate Background Worker service. Set
+// RUN_WORKER_IN_PROCESS=true only on the deployed backend's env vars —
+// never locally, since local dev runs the worker in its own terminal.
+if (process.env.RUN_WORKER_IN_PROCESS === "true") {
+  require("./workers/resume.worker");
+  console.log("[server] Resume worker started in-process (RUN_WORKER_IN_PROCESS=true)");
+}
+
 module.exports = { server, io };
